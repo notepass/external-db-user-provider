@@ -271,9 +271,9 @@ def main():
     # Verify connection to Kubernetes cluster
     try:
         v1 = client.CoreV1Api()
-        namespaces = v1.list_namespace()
+        #namespaces = v1.list_namespace()
         print(f"\nSuccessfully connected to Kubernetes cluster")
-        print(f"Found {len(namespaces.items)} namespaces")
+        #print(f"Found {len(namespaces.items)} namespaces")
         
     except ApiException as e:
         print(f"Error connecting to Kubernetes: {e}")
