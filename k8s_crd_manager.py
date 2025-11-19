@@ -167,32 +167,32 @@ def handle_db_user_creation(db_user_request):
         print(f"Error handling DbUserRequest creation: {e}")
 
 
-def handle_db_user_deletion(db_user_request):
+def handle_db_user_deletion(db_user):
     """
-    Handle deletion of a DbUserRequest custom resource
-    Calls the appropriate database user disable script based on db_name
+    Handle deletion of a DbUser custom resource
+    Calls the appropriate database user disable script based on db_type
     
     Args:
-        db_user_request: The DbUserRequest custom resource object
+        db_user: The DbUser custom resource object
     """
     try:
-        spec = db_user_request.get('spec', {})
+        spec = db_user.get('spec', {})
         db_type = spec.get('db_type', '')
         custom_db_name_prop = spec.get('custom_db_name_prop', '')
-        metadata = db_user_request.get('metadata', {})
+        metadata = db_user.get('metadata', {})
         resource_name = metadata.get('name', 'unknown')
 
-        print(f"Handling creation of DbUserRequest: {resource_name}")
+        print(f"Handling deletion of DbUser: {resource_name}")
         print(f"  db_type: {db_type}")
         print(f"  custom_db_name_prop: {custom_db_name_prop}")
 
-        # Determine which script to call based on db_name
+        # Determine which script to call based on db_type
         if db_type.lower() == 'mariadb':
-            script_path = './create-mariadb-user.sh'
+            script_path = './disable-mariadb-user.sh'
         elif db_type.lower() == 'postgres':
-            script_path = './create-pg-user.sh'
+            script_path = './disable-pg-user.sh'
         else:
-            print(f"Warning: Unknown db_name '{db_type}'. No action taken.")
+            print(f"Warning: Unknown db_type '{db_type}'. No action taken.")
             return
         
         # Call the script with parameters
@@ -205,12 +205,12 @@ def handle_db_user_deletion(db_user_request):
         print(f"Script exit code: {result.returncode}")
         
     except Exception as e:
-        print(f"Error handling DbUserRequest deletion: {e}")
+        print(f"Error handling DbUser deletion: {e}")
 
 
-def watch_db_user_requests(namespace='default'):
+def watch_db_users(namespace='default'):
     """
-    Watch for DbUserRequest custom resources and handle create/delete events
+    Watch for DbUser custom resources and handle delete events
     
     Args:
         namespace: Kubernetes namespace to watch (default: 'default')
@@ -218,9 +218,9 @@ def watch_db_user_requests(namespace='default'):
     api_instance = client.CustomObjectsApi()
     group = 'notepass.de'
     version = 'v1'
-    plural = 'dbuserrequests'
+    plural = 'dbusers'
     
-    print(f"Starting to watch DbUserRequest resources in namespace: {namespace}")
+    print(f"Starting to watch DbUser resources in namespace: {namespace}")
     print("=" * 60)
     
     w = watch.Watch()
@@ -234,17 +234,17 @@ def watch_db_user_requests(namespace='default'):
             plural=plural
         ):
             event_type = event['type']
-            db_user_request = event['object']
-            resource_name = db_user_request.get('metadata', {}).get('name', 'unknown')
+            db_user = event['object']
+            resource_name = db_user.get('metadata', {}).get('name', 'unknown')
             
             print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Event: {event_type} - {resource_name}")
             
-            if event_type == 'ADDED':
-                handle_db_user_creation(db_user_request)
-            #elif event_type == 'DELETED':
-            #    handle_db_user_deletion(db_user_request)
+            if event_type == 'DELETED':
+                handle_db_user_deletion(db_user)
+            elif event_type == 'ADDED':
+                print(f"DbUser {resource_name} was added (no action taken)")
             elif event_type == 'MODIFIED':
-                print(f"DbUserRequest {resource_name} was modified (no action taken)")
+                print(f"DbUser {resource_name} was modified (no action taken)")
             
     except KeyboardInterrupt:
         print("\nStopping watch...")
@@ -258,8 +258,8 @@ def watch_db_user_requests(namespace='default'):
 
 
 def main():
-    """Main function to watch and manage DbUserRequest CRDs"""
-    print("Kubernetes DbUserRequest CRD Manager")
+    """Main function to watch and manage DbUser CRDs"""
+    print("Kubernetes DbUser CRD Manager")
     print("=" * 60)
     
     # Load Kubernetes configuration
@@ -279,13 +279,13 @@ def main():
         print(f"Error connecting to Kubernetes: {e}")
         sys.exit(1)
     
-    print(f"\nStarting to watch for DbUserRequest resources...")
+    print(f"\nStarting to watch for DbUser resources...")
     print(f"Namespace: {namespace}")
     print(f"Press Ctrl+C to stop\n")
     
-    # Start watching for DbUserRequest resources
+    # Start watching for DbUser resources
     try:
-        watch_db_user_requests(namespace=namespace)
+        watch_db_users(namespace=namespace)
     except KeyboardInterrupt:
         print("\nShutting down gracefully...")
         sys.exit(0)
