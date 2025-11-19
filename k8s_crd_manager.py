@@ -53,6 +53,68 @@ def generate_db_password(length=24):
     return password
 
 
+def create_db_credentials_secret(secret_name, namespace, db_username, db_password, db_type, custom_db_name_prop=None):
+    """
+    Create a Kubernetes Secret with database credentials
+    
+    Args:
+        secret_name: Name of the secret to create
+        namespace: Kubernetes namespace
+        db_username: Database username (uppercase db name)
+        db_password: Generated database password
+        db_type: Database type (mariadb or postgres)
+        custom_db_name_prop: Optional custom database name property
+        
+    Returns:
+        The created secret object
+    """
+    import base64
+    
+    v1 = client.CoreV1Api()
+    
+    # Prepare secret data (all values must be base64 encoded)
+    secret_data = {
+        'dbUsername': base64.b64encode(db_username.encode()).decode('utf-8'),
+        'dbPassword': base64.b64encode(db_password.encode()).decode('utf-8'),
+        'dbDb': base64.b64encode(db_username.encode()).decode('utf-8'),  # Same as username
+        'dbType': base64.b64encode(db_type.encode()).decode('utf-8'),
+    }
+    
+    # Add dbNameAlt based on db_type
+    if db_type.lower() == 'mariadb':
+        db_name_alt = 'MySQL'
+    elif db_type.lower() == 'postgres':
+        db_name_alt = 'postgresql'
+    else:
+        db_name_alt = db_type
+    
+    secret_data['dbNameAlt'] = base64.b64encode(db_name_alt.encode()).decode('utf-8')
+    
+    # Add dbNameCustom only if custom_db_name_prop is provided
+    if custom_db_name_prop:
+        secret_data['dbNameCustom'] = base64.b64encode(custom_db_name_prop.encode()).decode('utf-8')
+    
+    # Create the secret object
+    secret = client.V1Secret(
+        api_version='v1',
+        kind='Secret',
+        metadata=client.V1ObjectMeta(
+            name=secret_name,
+            namespace=namespace
+        ),
+        type='Opaque',
+        data=secret_data
+    )
+    
+    try:
+        response = v1.create_namespaced_secret(namespace=namespace, body=secret)
+        print(f"Secret '{secret_name}' created successfully in namespace '{namespace}'")
+        return response
+    except ApiException as e:
+        print(f"Exception when creating secret: {e}")
+        raise
+
+
 def load_k8s_config():
     """Load Kubernetes configuration from cluster or local kubeconfig"""
     try:
@@ -214,6 +276,7 @@ def handle_db_user_creation(db_user_request):
         spec = db_user_request.get('spec', {})
         db_type = spec.get('db_type', '')
         custom_db_name_prop = spec.get('custom_db_name_prop', '')
+        secret_name = spec.get('secret_name', '')
         metadata = db_user_request.get('metadata', {})
         resource_name = metadata.get('name', 'unknown')
         namespace = metadata.get('namespace', 'default')
@@ -222,6 +285,7 @@ def handle_db_user_creation(db_user_request):
         print(f"Handling creation of DbUserRequest: {resource_name}")
         print(f"  db_type: {db_type}")
         print(f"  custom_db_name_prop: {custom_db_name_prop}")
+        print(f"  secret_name: {secret_name}")
         
         # Validate the database name
         is_valid, error_message = validate_db_name(custom_db_name_prop)
@@ -269,6 +333,31 @@ def handle_db_user_creation(db_user_request):
             group = 'notepass.de'
             version = 'v1'
             namespace = metadata.get('namespace', 'default')
+            
+            # Create Kubernetes Secret with database credentials if secret_name is provided
+            if secret_name:
+                try:
+                    create_db_credentials_secret(
+                        secret_name=secret_name,
+                        namespace=namespace,
+                        db_username=db_name_uppercase,
+                        db_password=db_password,
+                        db_type=db_type,
+                        custom_db_name_prop=custom_db_name_prop if custom_db_name_prop else None
+                    )
+                except Exception as e:
+                    print(f"Failed to create secret '{secret_name}': {e}")
+                    # Create an event for the secret creation failure
+                    create_event_for_resource(
+                        resource_name=resource_name,
+                        namespace=namespace,
+                        resource_uid=resource_uid,
+                        reason='SecretCreationFailed',
+                        message=f"Failed to create secret '{secret_name}': {str(e)}",
+                        event_type='Warning'
+                    )
+            else:
+                print("No secret_name provided, skipping secret creation")
             
             # Create DbUser object with the request data from DbUserRequest spec
             try:
