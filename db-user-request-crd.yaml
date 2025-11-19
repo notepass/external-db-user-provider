@@ -27,7 +27,11 @@ spec:
             spec:
               type: object
               properties:
+                db_type:
+                  type: string
                 db_name:
+                  type: string
+                secret_name:
                   type: string
                 custom_db_name_prop:
                   type: string
@@ -37,4 +41,4 @@ spec:
                     extensions:
                       type: array
                       items:
-                        type: string
+                          type: string
