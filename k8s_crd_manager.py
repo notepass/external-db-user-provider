@@ -9,8 +9,48 @@ import sys
 import subprocess
 import time
 import threading
+import re
+import secrets
+import string
 from kubernetes import client, config, watch
 from kubernetes.client.rest import ApiException
+
+
+def validate_db_name(db_name):
+    """
+    Validate database name to ensure it only contains letters, numbers, and underscores
+    
+    Args:
+        db_name: The database name to validate
+        
+    Returns:
+        tuple: (is_valid, error_message)
+    """
+    if not db_name:
+        return False, "Database name cannot be empty"
+    
+    # Check if name only contains letters, numbers, and underscores
+    if not re.match(r'^[a-zA-Z0-9_]+$', db_name):
+        return False, f"Database name '{db_name}' contains invalid characters. Only letters, numbers, and underscores are allowed."
+    
+    return True, None
+
+
+def generate_db_password(length=24):
+    """
+    Generate a database-safe password
+    
+    Args:
+        length: Length of the password (default: 24)
+        
+    Returns:
+        str: A randomly generated password safe for database use
+    """
+    # Use alphanumeric characters (uppercase, lowercase, digits)
+    # Avoid special characters that might cause issues in SQL contexts
+    alphabet = string.ascii_letters + string.digits
+    password = ''.join(secrets.choice(alphabet) for _ in range(length))
+    return password
 
 
 def load_k8s_config():
@@ -176,10 +216,35 @@ def handle_db_user_creation(db_user_request):
         custom_db_name_prop = spec.get('custom_db_name_prop', '')
         metadata = db_user_request.get('metadata', {})
         resource_name = metadata.get('name', 'unknown')
+        namespace = metadata.get('namespace', 'default')
+        resource_uid = metadata.get('uid', '')
         
         print(f"Handling creation of DbUserRequest: {resource_name}")
         print(f"  db_type: {db_type}")
         print(f"  custom_db_name_prop: {custom_db_name_prop}")
+        
+        # Validate the database name
+        is_valid, error_message = validate_db_name(custom_db_name_prop)
+        if not is_valid:
+            print(f"Validation error: {error_message}")
+            # Create an event for the validation failure
+            create_event_for_resource(
+                resource_name=resource_name,
+                namespace=namespace,
+                resource_uid=resource_uid,
+                reason='ValidationFailed',
+                message=error_message,
+                event_type='Warning'
+            )
+            return
+        
+        # Convert database name to uppercase
+        db_name_uppercase = custom_db_name_prop.upper()
+        print(f"  db_name_uppercase: {db_name_uppercase}")
+        
+        # Generate a secure database password
+        db_password = generate_db_password(24)
+        print(f"  Generated password (length: {len(db_password)})")
         
         # Determine which script to call based on db_name
         if db_type.lower() == 'mariadb':
@@ -190,8 +255,8 @@ def handle_db_user_creation(db_user_request):
             print(f"Warning: Unknown db_name '{db_type}'. No action taken.")
             return
         
-        # Call the script with parameters
-        cmd = [script_path, resource_name, db_type, custom_db_name_prop]
+        # Call the script with parameters (pass uppercase db name and generated password)
+        cmd = [script_path, resource_name, db_type, db_name_uppercase, db_password]
         result = subprocess.run(cmd, capture_output=True, text=True)
         
         print(f"Script output: {result.stdout}")
