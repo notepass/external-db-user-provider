@@ -150,14 +150,35 @@ def handle_db_user_creation(db_user_request):
             print(f"Script errors: {result.stderr}")
         print(f"Script exit code: {result.returncode}")
 
-        # If user creation was successful, delete the DbUserRequest CRD
+        # If user creation was successful, create a DbUser object and delete the DbUserRequest
         if result.returncode == 0:
             group = 'notepass.de'
             version = 'v1'
-            plural = 'dbuserrequests'
             namespace = metadata.get('namespace', 'default')
+            
+            # Create DbUser object with the request data from DbUserRequest spec
             try:
-                delete_crd_resource(group, version, namespace, plural, resource_name)
+                from datetime import datetime, timezone
+                db_user_body = {
+                    'apiVersion': f'{group}/{version}',
+                    'kind': 'DbUser',
+                    'metadata': {
+                        'name': resource_name,
+                        'namespace': namespace
+                    },
+                    'spec': {
+                        'request': spec,  # Store the entire spec from DbUserRequest
+                        'created': datetime.now(timezone.utc).isoformat()
+                    }
+                }
+                create_crd_resource(group, version, namespace, 'dbuser', db_user_body)
+                print(f"DbUser '{resource_name}' created successfully.")
+            except Exception as e:
+                print(f"Failed to create DbUser '{resource_name}': {e}")
+            
+            # Delete the DbUserRequest CRD after creating DbUser
+            try:
+                delete_crd_resource(group, version, namespace, 'dbuserrequests', resource_name)
                 print(f"DbUserRequest '{resource_name}' deleted after successful creation.")
             except Exception as e:
                 print(f"Failed to delete DbUserRequest '{resource_name}': {e}")
