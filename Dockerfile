@@ -17,9 +17,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the application files
 COPY k8s_crd_manager.py .
+COPY *.sh .
 
-# Make the script executable
-RUN chmod +x k8s_crd_manager.py
+# Make the scripts executable
+RUN chmod +x k8s_crd_manager.py *.sh
 
 # Set the entrypoint
 ENTRYPOINT ["python3", "k8s_crd_manager.py"]
