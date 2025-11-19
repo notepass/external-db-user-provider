@@ -113,6 +113,55 @@ def delete_crd_resource(group, version, namespace, plural, name):
         raise
 
 
+def create_event_for_resource(resource_name, namespace, resource_uid, reason, message, event_type='Warning'):
+    """
+    Create a Kubernetes event for a custom resource
+    
+    Args:
+        resource_name: Name of the resource the event is about
+        namespace: Kubernetes namespace
+        resource_uid: UID of the resource
+        reason: Short, machine-understandable string for the reason
+        message: Human-readable description of the event
+        event_type: Type of event (Normal or Warning)
+    """
+    v1 = client.CoreV1Api()
+    
+    try:
+        from datetime import datetime, timezone
+        
+        event_name = f"{resource_name}.{datetime.now(timezone.utc).strftime('%s')}"
+        
+        event = client.V1Event(
+            metadata=client.V1ObjectMeta(
+                name=event_name,
+                namespace=namespace
+            ),
+            involved_object=client.V1ObjectReference(
+                api_version='notepass.de/v1',
+                kind='DbUserRequest',
+                name=resource_name,
+                namespace=namespace,
+                uid=resource_uid
+            ),
+            reason=reason,
+            message=message,
+            type=event_type,
+            first_timestamp=datetime.now(timezone.utc),
+            last_timestamp=datetime.now(timezone.utc),
+            count=1,
+            source=client.V1EventSource(component='k8s-crd-manager')
+        )
+        
+        v1.create_namespaced_event(namespace=namespace, body=event)
+        print(f"Event created for {resource_name}: {reason}")
+        return event
+    except ApiException as e:
+        print(f"Exception when creating event: {e}")
+    except Exception as e:
+        print(f"Error creating event: {e}")
+
+
 def handle_db_user_creation(db_user_request):
     """
     Handle creation of a DbUserRequest custom resource
@@ -183,7 +232,25 @@ def handle_db_user_creation(db_user_request):
             except Exception as e:
                 print(f"Failed to delete DbUserRequest '{resource_name}': {e}")
         else:
+            # Script failed - create an event for the DbUserRequest
             print(f"DbUserRequest '{resource_name}' not deleted due to script error.")
+            namespace = metadata.get('namespace', 'default')
+            resource_uid = metadata.get('uid', '')
+            
+            error_message = f"User creation script failed with exit code {result.returncode}."
+            if result.stderr:
+                error_message += f" Error: {result.stderr.strip()}"
+            elif result.stdout:
+                error_message += f" Output: {result.stdout.strip()}"
+            
+            create_event_for_resource(
+                resource_name=resource_name,
+                namespace=namespace,
+                resource_uid=resource_uid,
+                reason='CreationFailed',
+                message=error_message,
+                event_type='Warning'
+            )
 
     except Exception as e:
         print(f"Error handling DbUserRequest creation: {e}")
