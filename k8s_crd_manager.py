@@ -587,9 +587,9 @@ def watch_db_user_requests():
     try:
         for event in w.stream(
             api_instance.list_custom_object_for_all_namespaces,
-            group=group,
-            version=version,
-            plural=plural
+            group,
+            version,
+            plural
         ):
             event_type = event['type']
             db_user_request = event['object']
@@ -634,9 +634,9 @@ def watch_db_users():
     try:
         for event in w.stream(
             api_instance.list_custom_object_for_all_namespaces,
-            group=group,
-            version=version,
-            plural=plural
+            group,
+            version,
+            plural
         ):
             event_type = event['type']
             db_user = event['object']
