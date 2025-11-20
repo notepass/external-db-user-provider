@@ -60,7 +60,7 @@ def create_db_credentials_secret(secret_name, namespace, db_username, db_passwor
     Args:
         secret_name: Name of the secret to create
         namespace: Kubernetes namespace
-        db_username: Database username (uppercase db name)
+        db_username: Database username (lowercase db name)
         db_password: Generated database password
         db_type: Database type (mariadb or postgres)
         custom_db_name_prop: Optional custom database name property
@@ -314,7 +314,7 @@ def handle_db_user_creation(db_user_request):
     try:
         spec = db_user_request.get('spec', {})
         db_type = spec.get('db_type', '')
-        custom_db_name_prop = spec.get('custom_db_name_prop', '')
+        user_and_db_name = spec.get('db_name', '')
         secret_name = spec.get('secret_name', '')
         metadata = db_user_request.get('metadata', {})
         resource_name = metadata.get('name', 'unknown')
@@ -323,11 +323,11 @@ def handle_db_user_creation(db_user_request):
         
         print(f"Handling creation of DbUserRequest: {resource_name}")
         print(f"  db_type: {db_type}")
-        print(f"  custom_db_name_prop: {custom_db_name_prop}")
+        print(f"  db_name: {user_and_db_name}")
         print(f"  secret_name: {secret_name}")
         
         # Validate the database name
-        is_valid, error_message = validate_db_name(custom_db_name_prop)
+        is_valid, error_message = validate_db_name(user_and_db_name)
         if not is_valid:
             print(f"Validation error: {error_message}")
             # Create an event for the validation failure
@@ -341,21 +341,21 @@ def handle_db_user_creation(db_user_request):
             )
             return
         
-        # Convert database name to uppercase
-        db_name_uppercase = custom_db_name_prop.upper()
-        print(f"  db_name_uppercase: {db_name_uppercase}")
+        # Convert database name to lowercase
+        db_name_lowercase = user_and_db_name.lower()
+        print(f"  db_name_lowercase: {db_name_lowercase}")
         
         # Check if a DbUser with this db_name already exists
-        existing_dbuser = find_existing_dbuser_by_db_name(db_name_uppercase, namespace)
+        existing_dbuser = find_existing_dbuser_by_db_name(db_name_lowercase, namespace)
         if existing_dbuser:
-            print(f"DbUser with db_name '{db_name_uppercase}' already exists. Skipping creation.")
+            print(f"DbUser with db_name '{db_name_lowercase}' already exists. Skipping creation.")
             # Create an event to indicate the request was already fulfilled
             create_event_for_resource(
                 resource_name=resource_name,
                 namespace=namespace,
                 resource_uid=resource_uid,
                 reason='AlreadyExists',
-                message=f"DbUser with db_name '{db_name_uppercase}' already exists. Request considered fulfilled.",
+                message=f"DbUser with db_name '{db_name_lowercase}' already exists. Request considered fulfilled.",
                 event_type='Normal'
             )
             
@@ -382,8 +382,8 @@ def handle_db_user_creation(db_user_request):
             print(f"Warning: Unknown db_name '{db_type}'. No action taken.")
             return
         
-        # Call the script with parameters (pass uppercase db name and generated password)
-        cmd = [script_path, resource_name, db_type, db_name_uppercase, db_password]
+        # Call the script with parameters (pass lowercase db name and generated password)
+        cmd = [script_path, db_name_lowercase, db_password]
         result = subprocess.run(cmd, capture_output=True, text=True)
         
         print(f"Script output: {result.stdout}")
@@ -403,7 +403,7 @@ def handle_db_user_creation(db_user_request):
                     create_db_credentials_secret(
                         secret_name=secret_name,
                         namespace=namespace,
-                        db_username=db_name_uppercase,
+                        db_username=db_name_lowercase,
                         db_password=db_password,
                         db_type=db_type,
                         custom_db_name_prop=custom_db_name_prop if custom_db_name_prop else None
@@ -433,13 +433,13 @@ def handle_db_user_creation(db_user_request):
                         'namespace': namespace
                     },
                     'spec': {
-                        'db_name': db_name_uppercase,  # Store the uppercase db_name
+                        'db_name': db_name_lowercase,  # Store the lowercase db_name
                         'request': spec,  # Store the entire spec from DbUserRequest
                         'created': datetime.now(timezone.utc).isoformat()
                     }
                 }
                 create_crd_resource(group, version, namespace, 'dbuser', db_user_body)
-                print(f"DbUser '{resource_name}' created successfully with db_name '{db_name_uppercase}'.")
+                print(f"DbUser '{resource_name}' created successfully with db_name '{db_name_lowercase}'.")
             except Exception as e:
                 print(f"Failed to create DbUser '{resource_name}': {e}")
             
