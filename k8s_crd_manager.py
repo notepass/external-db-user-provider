@@ -9,8 +9,110 @@ import sys
 import subprocess
 import time
 import threading
+import re
+import secrets
+import string
 from kubernetes import client, config, watch
 from kubernetes.client.rest import ApiException
+
+
+def validate_db_name(db_name):
+    """
+    Validate database name to ensure it only contains letters, numbers, and underscores
+    
+    Args:
+        db_name: The database name to validate
+        
+    Returns:
+        tuple: (is_valid, error_message)
+    """
+    if not db_name:
+        return False, "Database name cannot be empty"
+    
+    # Check if name only contains letters, numbers, and underscores
+    if not re.match(r'^[a-zA-Z0-9_]+$', db_name):
+        return False, f"Database name '{db_name}' contains invalid characters. Only letters, numbers, and underscores are allowed."
+    
+    return True, None
+
+
+def generate_db_password(length=24):
+    """
+    Generate a database-safe password
+    
+    Args:
+        length: Length of the password (default: 24)
+        
+    Returns:
+        str: A randomly generated password safe for database use
+    """
+    # Use alphanumeric characters (uppercase, lowercase, digits)
+    # Avoid special characters that might cause issues in SQL contexts
+    alphabet = string.ascii_letters + string.digits
+    password = ''.join(secrets.choice(alphabet) for _ in range(length))
+    return password
+
+
+def create_db_credentials_secret(secret_name, namespace, db_username, db_password, db_type, custom_db_name_prop=None):
+    """
+    Create a Kubernetes Secret with database credentials
+    
+    Args:
+        secret_name: Name of the secret to create
+        namespace: Kubernetes namespace
+        db_username: Database username (uppercase db name)
+        db_password: Generated database password
+        db_type: Database type (mariadb or postgres)
+        custom_db_name_prop: Optional custom database name property
+        
+    Returns:
+        The created secret object
+    """
+    import base64
+    
+    v1 = client.CoreV1Api()
+    
+    # Prepare secret data (all values must be base64 encoded)
+    secret_data = {
+        'dbUsername': base64.b64encode(db_username.encode()).decode('utf-8'),
+        'dbPassword': base64.b64encode(db_password.encode()).decode('utf-8'),
+        'dbDb': base64.b64encode(db_username.encode()).decode('utf-8'),  # Same as username
+        'dbType': base64.b64encode(db_type.encode()).decode('utf-8'),
+    }
+    
+    # Add dbNameAlt based on db_type
+    if db_type.lower() == 'mariadb':
+        db_name_alt = 'MySQL'
+    elif db_type.lower() == 'postgres':
+        db_name_alt = 'postgresql'
+    else:
+        db_name_alt = db_type
+    
+    secret_data['dbNameAlt'] = base64.b64encode(db_name_alt.encode()).decode('utf-8')
+    
+    # Add dbNameCustom only if custom_db_name_prop is provided
+    if custom_db_name_prop:
+        secret_data['dbNameCustom'] = base64.b64encode(custom_db_name_prop.encode()).decode('utf-8')
+    
+    # Create the secret object
+    secret = client.V1Secret(
+        api_version='v1',
+        kind='Secret',
+        metadata=client.V1ObjectMeta(
+            name=secret_name,
+            namespace=namespace
+        ),
+        type='Opaque',
+        data=secret_data
+    )
+    
+    try:
+        response = v1.create_namespaced_secret(namespace=namespace, body=secret)
+        print(f"Secret '{secret_name}' created successfully in namespace '{namespace}'")
+        return response
+    except ApiException as e:
+        print(f"Exception when creating secret: {e}")
+        raise
 
 
 def load_k8s_config():
@@ -113,6 +215,45 @@ def delete_crd_resource(group, version, namespace, plural, name):
         raise
 
 
+def find_existing_dbuser_by_db_name(db_name, namespace):
+    """
+    Find an existing DbUser by db_name in the specified namespace
+    
+    Args:
+        db_name: The database name to search for (uppercase)
+        namespace: Kubernetes namespace to search in
+        
+    Returns:
+        DbUser object if found, None otherwise
+    """
+    api_instance = client.CustomObjectsApi()
+    group = 'notepass.de'
+    version = 'v1'
+    plural = 'dbuser'
+    
+    try:
+        # List all DbUser objects in the namespace
+        response = api_instance.list_namespaced_custom_object(
+            group=group,
+            version=version,
+            namespace=namespace,
+            plural=plural
+        )
+        
+        # Check if any DbUser has a matching db_name
+        for item in response.get('items', []):
+            spec = item.get('spec', {})
+            existing_db_name = spec.get('db_name', '')
+            if existing_db_name == db_name:
+                print(f"Found existing DbUser with db_name '{db_name}': {item['metadata']['name']}")
+                return item
+        
+        return None
+    except ApiException as e:
+        print(f"Exception when listing DbUser objects: {e}")
+        return None
+
+
 def create_event_for_resource(resource_name, namespace, resource_uid, reason, message, event_type='Warning'):
     """
     Create a Kubernetes event for a custom resource
@@ -132,7 +273,7 @@ def create_event_for_resource(resource_name, namespace, resource_uid, reason, me
         
         event_name = f"{resource_name}.{datetime.now(timezone.utc).strftime('%s')}"
         
-        event = client.V1Event(
+        event = client.CoreV1Event(
             metadata=client.V1ObjectMeta(
                 name=event_name,
                 namespace=namespace
@@ -174,12 +315,63 @@ def handle_db_user_creation(db_user_request):
         spec = db_user_request.get('spec', {})
         db_type = spec.get('db_type', '')
         custom_db_name_prop = spec.get('custom_db_name_prop', '')
+        secret_name = spec.get('secret_name', '')
         metadata = db_user_request.get('metadata', {})
         resource_name = metadata.get('name', 'unknown')
+        namespace = metadata.get('namespace', 'default')
+        resource_uid = metadata.get('uid', '')
         
         print(f"Handling creation of DbUserRequest: {resource_name}")
         print(f"  db_type: {db_type}")
         print(f"  custom_db_name_prop: {custom_db_name_prop}")
+        print(f"  secret_name: {secret_name}")
+        
+        # Validate the database name
+        is_valid, error_message = validate_db_name(custom_db_name_prop)
+        if not is_valid:
+            print(f"Validation error: {error_message}")
+            # Create an event for the validation failure
+            create_event_for_resource(
+                resource_name=resource_name,
+                namespace=namespace,
+                resource_uid=resource_uid,
+                reason='ValidationFailed',
+                message=error_message,
+                event_type='Warning'
+            )
+            return
+        
+        # Convert database name to uppercase
+        db_name_uppercase = custom_db_name_prop.upper()
+        print(f"  db_name_uppercase: {db_name_uppercase}")
+        
+        # Check if a DbUser with this db_name already exists
+        existing_dbuser = find_existing_dbuser_by_db_name(db_name_uppercase, namespace)
+        if existing_dbuser:
+            print(f"DbUser with db_name '{db_name_uppercase}' already exists. Skipping creation.")
+            # Create an event to indicate the request was already fulfilled
+            create_event_for_resource(
+                resource_name=resource_name,
+                namespace=namespace,
+                resource_uid=resource_uid,
+                reason='AlreadyExists',
+                message=f"DbUser with db_name '{db_name_uppercase}' already exists. Request considered fulfilled.",
+                event_type='Normal'
+            )
+            
+            # Delete the DbUserRequest as it's considered fulfilled
+            try:
+                group = 'notepass.de'
+                version = 'v1'
+                delete_crd_resource(group, version, namespace, 'dbuserrequests', resource_name)
+                print(f"DbUserRequest '{resource_name}' deleted as it was already fulfilled.")
+            except Exception as e:
+                print(f"Failed to delete DbUserRequest '{resource_name}': {e}")
+            return
+        
+        # Generate a secure database password
+        db_password = generate_db_password(24)
+        print(f"  Generated password (length: {len(db_password)})")
         
         # Determine which script to call based on db_name
         if db_type.lower() == 'mariadb':
@@ -190,8 +382,8 @@ def handle_db_user_creation(db_user_request):
             print(f"Warning: Unknown db_name '{db_type}'. No action taken.")
             return
         
-        # Call the script with parameters
-        cmd = [script_path, resource_name, db_type, custom_db_name_prop]
+        # Call the script with parameters (pass uppercase db name and generated password)
+        cmd = [script_path, resource_name, db_type, db_name_uppercase, db_password]
         result = subprocess.run(cmd, capture_output=True, text=True)
         
         print(f"Script output: {result.stdout}")
@@ -205,6 +397,31 @@ def handle_db_user_creation(db_user_request):
             version = 'v1'
             namespace = metadata.get('namespace', 'default')
             
+            # Create Kubernetes Secret with database credentials if secret_name is provided
+            if secret_name:
+                try:
+                    create_db_credentials_secret(
+                        secret_name=secret_name,
+                        namespace=namespace,
+                        db_username=db_name_uppercase,
+                        db_password=db_password,
+                        db_type=db_type,
+                        custom_db_name_prop=custom_db_name_prop if custom_db_name_prop else None
+                    )
+                except Exception as e:
+                    print(f"Failed to create secret '{secret_name}': {e}")
+                    # Create an event for the secret creation failure
+                    create_event_for_resource(
+                        resource_name=resource_name,
+                        namespace=namespace,
+                        resource_uid=resource_uid,
+                        reason='SecretCreationFailed',
+                        message=f"Failed to create secret '{secret_name}': {str(e)}",
+                        event_type='Warning'
+                    )
+            else:
+                print("No secret_name provided, skipping secret creation")
+            
             # Create DbUser object with the request data from DbUserRequest spec
             try:
                 from datetime import datetime, timezone
@@ -216,12 +433,13 @@ def handle_db_user_creation(db_user_request):
                         'namespace': namespace
                     },
                     'spec': {
+                        'db_name': db_name_uppercase,  # Store the uppercase db_name
                         'request': spec,  # Store the entire spec from DbUserRequest
                         'created': datetime.now(timezone.utc).isoformat()
                     }
                 }
                 create_crd_resource(group, version, namespace, 'dbuser', db_user_body)
-                print(f"DbUser '{resource_name}' created successfully.")
+                print(f"DbUser '{resource_name}' created successfully with db_name '{db_name_uppercase}'.")
             except Exception as e:
                 print(f"Failed to create DbUser '{resource_name}': {e}")
             
@@ -254,6 +472,24 @@ def handle_db_user_creation(db_user_request):
 
     except Exception as e:
         print(f"Error handling DbUserRequest creation: {e}")
+        # Create an event for the unexpected error
+        try:
+            metadata = db_user_request.get('metadata', {})
+            resource_name = metadata.get('name', 'unknown')
+            namespace = metadata.get('namespace', 'default')
+            resource_uid = metadata.get('uid', '')
+            
+            error_message = f"Unexpected error during user creation: {str(e)}"
+            create_event_for_resource(
+                resource_name=resource_name,
+                namespace=namespace,
+                resource_uid=resource_uid,
+                reason='UnexpectedError',
+                message=error_message,
+                event_type='Warning'
+            )
+        except Exception as event_error:
+            print(f"Failed to create event for unexpected error: {event_error}")
 
 
 def handle_db_user_deletion(db_user_request):
@@ -333,36 +569,34 @@ def handle_db_user_object_deletion(db_user):
         print(f"Error handling DbUser deletion: {e}")
 
 
-def watch_db_user_requests(namespace='default'):
+def watch_db_user_requests():
     """
     Watch for DbUserRequest custom resources and handle create/delete events
-    
-    Args:
-        namespace: Kubernetes namespace to watch (default: 'default')
+    across all namespaces
     """
     api_instance = client.CustomObjectsApi()
     group = 'notepass.de'
     version = 'v1'
     plural = 'dbuserrequests'
     
-    print(f"Starting to watch DbUserRequest resources in namespace: {namespace}")
+    print(f"Starting to watch DbUserRequest resources in all namespaces")
     print("=" * 60)
     
     w = watch.Watch()
     
     try:
         for event in w.stream(
-            api_instance.list_namespaced_custom_object,
-            group=group,
-            version=version,
-            namespace=namespace,
-            plural=plural
+            api_instance.list_custom_object_for_all_namespaces,
+            group,
+            version,
+            plural
         ):
             event_type = event['type']
             db_user_request = event['object']
             resource_name = db_user_request.get('metadata', {}).get('name', 'unknown')
+            resource_namespace = db_user_request.get('metadata', {}).get('namespace', 'unknown')
             
-            print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Event: {event_type} - {resource_name}")
+            print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Event: {event_type} - {resource_namespace}/{resource_name}")
             
             if event_type == 'ADDED':
                 handle_db_user_creation(db_user_request)
@@ -382,36 +616,34 @@ def watch_db_user_requests(namespace='default'):
         raise
 
 
-def watch_db_users(namespace='default'):
+def watch_db_users():
     """
     Watch for DbUser custom resources and handle deletion events
-    
-    Args:
-        namespace: Kubernetes namespace to watch (default: 'default')
+    across all namespaces
     """
     api_instance = client.CustomObjectsApi()
     group = 'notepass.de'
     version = 'v1'
     plural = 'dbuser'
     
-    print(f"Starting to watch DbUser resources in namespace: {namespace}")
+    print(f"Starting to watch DbUser resources in all namespaces")
     print("=" * 60)
     
     w = watch.Watch()
     
     try:
         for event in w.stream(
-            api_instance.list_namespaced_custom_object,
-            group=group,
-            version=version,
-            namespace=namespace,
-            plural=plural
+            api_instance.list_custom_object_for_all_namespaces,
+            group,
+            version,
+            plural
         ):
             event_type = event['type']
             db_user = event['object']
             resource_name = db_user.get('metadata', {}).get('name', 'unknown')
+            resource_namespace = db_user.get('metadata', {}).get('namespace', 'unknown')
             
-            print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Event: {event_type} - {resource_name}")
+            print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Event: {event_type} - {resource_namespace}/{resource_name}")
             
             if event_type == 'DELETED':
                 handle_db_user_object_deletion(db_user)
@@ -439,9 +671,6 @@ def main():
     # Load Kubernetes configuration
     load_k8s_config()
     
-    # Get namespace from environment variable or use default
-    namespace = os.environ.get('WATCH_NAMESPACE', 'default')
-    
     # Verify connection to Kubernetes cluster
     try:
         v1 = client.CoreV1Api()
@@ -454,7 +683,7 @@ def main():
         sys.exit(1)
     
     print(f"\nStarting to watch for DbUserRequest and DbUser resources...")
-    print(f"Namespace: {namespace}")
+    print(f"Watching all namespaces")
     print(f"Press Ctrl+C to stop\n")
     
     # Start watching for both DbUserRequest and DbUser resources in separate threads
@@ -462,14 +691,12 @@ def main():
         # Create threads for both watchers
         db_user_request_thread = threading.Thread(
             target=watch_db_user_requests,
-            args=(namespace,),
             daemon=True,
             name="DbUserRequestWatcher"
         )
         
         db_user_thread = threading.Thread(
             target=watch_db_users,
-            args=(namespace,),
             daemon=True,
             name="DbUserWatcher"
         )

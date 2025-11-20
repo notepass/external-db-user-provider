@@ -27,6 +27,8 @@ spec:
             spec:
               type: object
               properties:
+                db_name:
+                  type: string
                 request:
                   type: object
                 created:
