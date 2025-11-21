@@ -154,8 +154,8 @@ def create_db_user(request):
             'namespace': metadata_obj.get('namespace')
         },
         'spec': {
-            'db_name': spec.get('db_name').lower(),  # Store the lowercase db_name
-            'request': spec,  # Store the entire spec from DbUserRequest
+            'db_name': spec.get('db_name').lower(),
+            'secret_name': spec.get('secret_name'),
             'created': datetime.now(timezone.utc).isoformat()
         }
     }
