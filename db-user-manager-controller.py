@@ -135,10 +135,10 @@ def call_create_script(request, password):
     result = subprocess.run(cmd, capture_output=True, text=True)
 
     if result.returncode == 0:
-        log.info(f"Successfully called {script_path} to create DB {db_name}. Output:\n========\nSTDOUT: {result.stdout}\n========\nSTDERR:{result.stderr}")
+        log.info(f"Successfully called {script_path} to create DB {db_name}. Output:\n====[STDOUT]====\n: {result.stdout}\n====[STDERR]====\n:{result.stderr}\n====[END]====")
         return db_name
     else:
-        raise Exception(f"Script {script_path} returned with exit code {result.returncode}.\n========\nSTDOUT: {result.stdout}\n========\nSTDERR:{result.stderr}")
+        raise Exception(f"Script {script_path} returned with exit code {result.returncode}.\n====[STDOUT]====\n: {result.stdout}\n====[STDERR]====\n:{result.stderr}\n====[END]====")
 
 def create_db_user(request):
     spec = request.get('spec')
