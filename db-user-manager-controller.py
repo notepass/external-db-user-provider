@@ -240,7 +240,7 @@ def create_secret_for_request(request, password):
     if spec.get('custom_db_name_prop'):
         values["dbTypeCustom"] = spec.get('custom_db_name_prop')
 
-    create_secret(values, metadata_obj.get('name'), metadata_obj.get('namespace'))
+    create_secret(values, spec.get('secret_name'), metadata_obj.get('namespace'))
 
 def create_secret(values, name, namespace):
     log.info(f"Creating DB user secret '{name}' in '{namespace}'")
