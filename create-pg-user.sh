@@ -10,7 +10,7 @@ if [ -z "$DB_NAME" ] || [ -z "$DB_USER" ] || [ -z "$DB_PASS" ]; then
   exit 1
 fi
 
-psql -d postgres -U "$PG_ADMIN_USER_USERNAME" -h "$DB_SERVER_POSTGRES" <<EOF
+psql -d postgres <<EOF
 CREATE DATABASE $DB_NAME;
 CREATE USER $DB_USER WITH ENCRYPTED PASSWORD '$DB_PASS';
 GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;
