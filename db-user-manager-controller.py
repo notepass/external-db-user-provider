@@ -51,10 +51,10 @@ def create_event_for_request(request, reason, message, event_type='Warning'):
         message: Human-readable description of the event
         event_type: Type of event (Normal or Warning)
     """
-    metadata = request.get('metadata', {})
-    resource_name = metadata.get('name')
-    namespace = metadata.get('namespace')
-    resource_uid = metadata.get('uid')
+    metadata_obj = request.get('metadata', {})
+    resource_name = metadata_obj.get('name')
+    namespace = metadata_obj.get('namespace')
+    resource_uid = metadata_obj.get('uid')
 
     log.info(f"metadata={metadata} / resource_name={resource_name} / namespace={namespace} / resource_uid={resource_uid}")
 
@@ -87,13 +87,13 @@ def create_event_for_request(request, reason, message, event_type='Warning'):
     return event
 
 def delete_request(request):
-    metadata = request.get('metadata')
+    metadata_obj = request.get('metadata')
     client.CustomObjectsApi().delete_namespaced_custom_object(
         group='notepass.de',
         version='v1',
-        namespace=metadata.get('namespace'),
+        namespace=metadata_obj.get('namespace'),
         plural='dbuserrequests',
-        name=metadata.get('name')
+        name=metadata_obj.get('name')
     )
 
 def call_create_script(request, password):
@@ -120,15 +120,15 @@ def call_create_script(request, password):
 
 def create_db_user(request):
     spec = request.get('spec')
-    metadata = request.get('metadata')
+    metadata_obj = request.get('metadata')
 
-    log.info(f"Creating according DbUser '{metadata.get('name')}' for DbUserRequest '{metadata.get('name')}'")
+    log.info(f"Creating according DbUser '{metadata_obj.get('name')}' for DbUserRequest '{metadata_obj.get('name')}'")
     db_user_body = {
         'apiVersion': f'notepass.de/v1',
         'kind': 'DbUser',
         'metadata': {
-            'name': metadata.get('name'),
-            'namespace': metadata.get('namespace')
+            'name': metadata_obj.get('name'),
+            'namespace': metadata_obj.get('namespace')
         },
         'spec': {
             'db_name': spec.get('db_name').lower(),  # Store the lowercase db_name
@@ -136,7 +136,7 @@ def create_db_user(request):
             'created': datetime.now(timezone.utc).isoformat()
         }
     }
-    create_crd_resource('notepass.de', 'v1', metadata.get('namespace'), 'dbuser', db_user_body)
+    create_crd_resource('notepass.de', 'v1', metadata_obj.get('namespace'), 'dbuser', db_user_body)
     log.info("DbUser created")
 
 def create_crd_resource(group, version, namespace, plural, body):
@@ -176,8 +176,66 @@ def create_custom_object_watch(plural):
     except Exception as e:
         raise Exception(f"Could not create a watch for notepass.de:{plural}:v1. Reason: {e}")
 
+def db_user_exists(request):
+    metadata_obj = request.get('metadata')
+    namespace = metadata_obj.get('namespace')
+    name = metadata_obj.get('name')
+
+    response = client.CustomObjectsApi().list_namespaced_custom_object(
+        group='notepass.de',
+        version='v1',
+        namespace=namespace,
+        plural='dbusers',
+        name=name
+    )
+
+    return len(response.get('items', [])) > 0
+
+
+def find_existing_dbuser_by_db_name(request):
+    """
+    Find an existing DbUser by db_name in the specified namespace
+
+    Args:
+        db_name: The database name to search for (uppercase)
+        namespace: Kubernetes namespace to search in
+
+    Returns:
+        DbUser object if found, None otherwise
+    """
+    metadata_obj = request.get('metadata')
+    spec = request.get('spec')
+    namespace = metadata_obj.get('namespace')
+    db_name = spec.get('db_name').lower()
+
+    api_instance = client.CustomObjectsApi()
+    group = 'notepass.de'
+    version = 'v1'
+    plural = 'dbusers'
+
+    try:
+        # List all DbUser objects in the namespace
+        response = api_instance.list_namespaced_custom_object(
+            group=group,
+            version=version,
+            namespace=namespace,
+            plural=plural
+        )
+
+        # Check if any DbUser has a matching db_name
+        for item in response.get('items', []):
+            spec = item.get('spec', {})
+            existing_db_name = spec.get('db_name', '')
+            if existing_db_name == db_name:
+                print(f"Found existing DbUser with db_name '{db_name}': {item['metadata']['name']}")
+                return item
+
+        return None
+    except ApiException as e:
+        raise Exception(f"Exception when listing DbUser objects: {e}")
+
 def create_secret_for_request(request, password):
-    metadata = request.get('metadata')
+    metadata_obj = request.get('metadata')
     spec = request.get('spec')
     is_pg = spec.get('db_type').lower() == 'postgres'
 
@@ -197,8 +255,7 @@ def create_secret_for_request(request, password):
     if spec.get('custom_db_name_prop'):
         values["dbTypeCustom"] = spec.get('custom_db_name_prop')
 
-    create_secret(values, metadata.get('name'), metadata.get('namespace'))
-
+    create_secret(values, metadata_obj.get('name'), metadata_obj.get('namespace'))
 
 def create_secret(values, name, namespace):
     log.info(f"Creating DB user secret '{name}' in '{namespace}'")
@@ -238,10 +295,17 @@ def watch_user_requests():
                         log.error(f"Validation failed for request with name '{source_name}' in '{source_namespace}': {exc}. Will ignore request.")
                         #create_event_for_request(db_user_request, 'ValidationFailed', exc)
                         continue
-                    password = generate_simple_password()
-                    db_name_and_username = call_create_script(db_user_request, password)
-                    create_secret_for_request(db_user_request, password)
-                    create_db_user(db_user_request)
+
+                    if db_user_exists(db_user_request):
+                        # TODO: Copy secret in this case. Also integrate create_secret_for_request into this case, where there is another DBUR with a different name but same DB.
+                        # Both cases should just copy the secret.
+                        log.info(f"DbUser with name '{source_name}' already exists, skipping creating of new DB/User. Will skip request. Note: Secrets are not copied!")
+                    else:
+                        password = generate_simple_password()
+                        db_name_and_username = call_create_script(db_user_request, password)
+                        create_secret_for_request(db_user_request, password)
+                        create_db_user(db_user_request)
+
                     delete_request(db_user_request)
 
 
