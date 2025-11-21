@@ -295,7 +295,8 @@ def watch_user_requests():
 
 
             except Exception as ex:
-                log.error(f"Error while in event processing loop: {ex}. Trying to continue. Trace:\n{traceback.format_exc()}")
+                log.error(f"Error while in event processing loop: {ex}. Trying to continue.")
+                log.debug(f"Trace:\n{traceback.format_exc()}")
     except Exception as e:
         raise Exception(f"Error while trying to loop over events: {e}")
 
@@ -305,6 +306,10 @@ def validate_db_name(db_name):
 
     if not regex.match(r'^[a-z0-9_]+$', db_name):
         raise Exception("DB name is not valid. Allowed a-z0-9_")
+
+def validate_k8s_resource_name(resource_name):
+    if not regex.match(r'^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$', resource_name):
+        raise Exception(f"Invalid name for a resource: \"{resource_name}\": a lowercase RFC 1123 subdomain must consist of lower case alphanumeric characters, '-' or '.', and must start and end with an alphanumeric character (e.g. 'example.com', regex used for validation is '[a-z0-9[]([-a-z0-9[]*[a-z0-9[])?(\\\\.[a-z0-9[]([-a-z0-9[]*[a-z0-9[])?)*')")
 
 def generate_db_password(length=24):
     alphabet = string.ascii_letters + string.digits
@@ -338,6 +343,7 @@ def validate_user_request(request):
 
     try:
         validate_db_name(user_and_db_name)
+        validate_k8s_resource_name(secret_name)
     except Exception as e:
         raise Exception(f"Validation error: The db_name value '{user_and_db_name}' is invalid: {e}")
 
