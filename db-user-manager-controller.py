@@ -343,9 +343,13 @@ def validate_user_request(request):
 
     try:
         validate_db_name(user_and_db_name)
-        validate_k8s_resource_name(secret_name)
     except Exception as e:
         raise Exception(f"Validation error: The db_name value '{user_and_db_name}' is invalid: {e}")
+
+    try:
+        validate_k8s_resource_name(secret_name)
+    except Exception as e:
+        raise Exception(f"Validation error: The secret_name value '{user_and_db_name}' is invalid: {e}")
 
 def watch_db_users():
     log.info("Watching DB users")
