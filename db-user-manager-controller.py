@@ -205,7 +205,7 @@ def create_secret(values, name, namespace):
 
     encoded_values = {}
     for key, value in values.items():
-        encoded_values[key] = base64.b64encode(value)
+        encoded_values[key] = base64.b64encode(value.encode("utf-8"))
 
     secret = client.V1Secret(
         api_version='v1',
