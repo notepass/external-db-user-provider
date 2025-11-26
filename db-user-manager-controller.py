@@ -41,6 +41,36 @@ formatter = logging.Formatter('[%(levelname)s] %(message)s')
 handler.setFormatter(formatter)
 log.addHandler(handler)
 
+def update_request_status(request, phase, message=None):
+    """
+    Patch the status subresource of a DbUserRequest.
+    Use this instead of deleting the request so ArgoCD self-heal is preserved.
+    """
+    api = client.CustomObjectsApi()
+    metadata_obj = request.get('metadata', {})
+    name = metadata_obj.get('name')
+    namespace = metadata_obj.get('namespace')
+    status_body = {
+        "status": {
+            "phase": phase,
+            "message": message or "",
+            "lastUpdated": datetime.now(timezone.utc).isoformat()
+        }
+    }
+    try:
+        api.patch_namespaced_custom_object_status(
+            group="notepass.de",
+            version="v1",
+            namespace=namespace,
+            plural="dbuserrequests",
+            name=name,
+            body=status_body
+        )
+        log.info(f"Updated status of DbUserRequest '{name}' in '{namespace}' to '{phase}'")
+    except ApiException as e:
+        log.error(f"Failed to patch status for {name}/{namespace}: {e}")
+        raise
+
 def generate_simple_password(length=24):
     """
     Generate a database-safe password
@@ -56,61 +86,6 @@ def generate_simple_password(length=24):
     alphabet = string.ascii_letters + string.digits
     password = ''.join(secrets.choice(alphabet) for _ in range(length))
     return password
-
-def create_event_for_request(request, reason, message, event_type='Warning'):
-    """
-    Create a Kubernetes event for a custom resource
-
-    Args:
-        request: DbUserRequest object
-        reason: Short, machine-understandable string for the reason
-        message: Human-readable description of the event
-        event_type: Type of event (Normal or Warning)
-    """
-    metadata_obj = request.get('metadata', {})
-    resource_name = metadata_obj.get('name')
-    namespace = metadata_obj.get('namespace')
-    resource_uid = metadata_obj.get('uid')
-
-    log.info(f"metadata={metadata} / resource_name={resource_name} / namespace={namespace} / resource_uid={resource_uid}")
-
-    v1 = client.CoreV1Api()
-
-    event_name = f"{resource_name}.{datetime.now(timezone.utc).strftime('%s')}"
-
-    event = client.CoreV1Event(
-        metadata=client.V1ObjectMeta(
-            name=event_name,
-            namespace=namespace
-        ),
-        involved_object=client.V1ObjectReference(
-            api_version='notepass.de/v1',
-            kind='DbUserRequest',
-            name=resource_name,
-            namespace=namespace,
-            uid=resource_uid
-        ),
-        reason=reason,
-        message=message,
-        type=event_type,
-        first_timestamp=datetime.now(timezone.utc),
-        last_timestamp=datetime.now(timezone.utc),
-        count=1,
-        source=client.V1EventSource(component='db-user-manager-controller')
-    )
-
-    v1.create_namespaced_event(namespace=namespace, body=event)
-    return event
-
-def delete_request(request):
-    metadata_obj = request.get('metadata')
-    client.CustomObjectsApi().delete_namespaced_custom_object(
-        group='notepass.de',
-        version='v1',
-        namespace=metadata_obj.get('namespace'),
-        plural='dbuserrequests',
-        name=metadata_obj.get('name')
-    )
 
 def call_create_script(request, password):
     spec = request.get('spec')
@@ -137,31 +112,10 @@ def call_create_script(request, password):
     result = subprocess.run(cmd, capture_output=True, text=True)
 
     if result.returncode == 0:
-        log.info(f"Successfully called {script_path} to create DB {db_name}. Output:\n====[STDOUT]====\n: {result.stdout}\n====[STDERR]====\n:{result.stderr}\n====[END]====")
+        log.info(f"Successfully called {script_path} to create DB {db_name}. Output:\n====[STDOUT]====\n {result.stdout}\n====[STDERR]====\n{result.stderr}\n====[END]====")
         return db_name
     else:
-        raise Exception(f"Script {script_path} returned with exit code {result.returncode}.\n====[STDOUT]====\n: {result.stdout}\n====[STDERR]====\n:{result.stderr}\n====[END]====")
-
-def create_db_user(request):
-    spec = request.get('spec')
-    metadata_obj = request.get('metadata')
-
-    log.info(f"Creating according DbUser '{metadata_obj.get('name')}' for DbUserRequest '{metadata_obj.get('name')}'")
-    db_user_body = {
-        'apiVersion': f'notepass.de/v1',
-        'kind': 'DbUser',
-        'metadata': {
-            'name': metadata_obj.get('name'),
-            'namespace': metadata_obj.get('namespace')
-        },
-        'spec': {
-            'db_name': spec.get('db_name').lower(),
-            'secret_name': spec.get('secret_name'),
-            'created': datetime.now(timezone.utc).isoformat()
-        }
-    }
-    create_crd_resource('notepass.de', 'v1', metadata_obj.get('namespace'), 'dbusers', db_user_body)
-    log.info("DbUser created")
+        raise Exception(f"Script {script_path} returned with exit code {result.returncode}.\n====[STDOUT]====\n {result.stdout}\n====[STDERR]====\n{result.stderr}\n====[END]====")
 
 def create_crd_resource(group, version, namespace, plural, body):
     """
@@ -199,37 +153,6 @@ def create_custom_object_watch(plural):
         )
     except Exception as e:
         raise Exception(f"Could not create a watch for notepass.de:{plural}:v1. Reason: {e}")
-
-def find_existing_dbuser(name, namespace):
-    """
-    Find an existing DbUser custom object by its resource name in the given namespace.
-
-    Args:
-        name: Name of the DbUser resource to look up
-        namespace: Namespace where the DbUser resource should reside
-
-    Returns:
-        The DbUser object (dict) if found, otherwise None.
-    """
-    api_instance = client.CustomObjectsApi()
-    group = 'notepass.de'
-    version = 'v1'
-    plural = 'dbusers'
-
-    try:
-        obj = api_instance.get_namespaced_custom_object(
-            group=group,
-            version=version,
-            namespace=namespace,
-            plural=plural,
-            name=name
-        )
-        return obj
-    except ApiException as e:
-        # If the object isn't found, return None. Otherwise re-raise as exception.
-        if hasattr(e, 'status') and e.status == 404:
-            return None
-        raise Exception(f"Exception when retrieving DbUser '{name}' in namespace '{namespace}': {e}")
 
 def find_existing_secret(name, namespace):
     """
@@ -308,6 +231,9 @@ def watch_user_requests():
                 event_type = event.get('type')
                 if event_type == 'ADDED':
                     db_user_request = event.get('object', {})
+                    if db_user_request.get('status', {}).get('phase', 'UNSET') != "Pending":
+                        log.debug(f"Not processing DBUR '{db_user_request.get('metadata', {}).get('namespace')}:{db_user_request.get('metadata', {}).get('name')}', as state is '{db_user_request.get('status', {}).get('phase', 'UNSET')}' and not 'Pending'")
+                        continue
                     if not isinstance(db_user_request, dict):
                         log.warning(f"Received non-dict db_user_request: {db_user_request}. Skipping.")
                         continue
@@ -318,29 +244,25 @@ def watch_user_requests():
                         validate_user_request(db_user_request)
                     except Exception as exc:
                         log.error(f"Validation failed for request with name '{source_name}' in '{source_namespace}': {exc}. Will ignore request.")
-                        #create_event_for_request(db_user_request, 'ValidationFailed', exc)
                         continue
 
                     # TODO: Also checkk if the secret already exists. Creation order is secret -> dbuser -> delete request!
-                    if find_existing_dbuser(db_user_request.get('metadata', {}).get('name'), db_user_request.get('metadata', {}).get('namespace')):
-                        # TODO: Copy secret in this case. Also integrate find_existing_dbuser_by_db_name into this case, where there is another DBUR with a different name but same DB.
-                        # Both cases should just copy the secret.
-                        log.info(f"DbUser with name '{source_name}' already exists, skipping creating of new DB/User. Will skip request. Note: Secrets are not copied!")
-                    elif find_existing_secret(db_user_request.get('spec', {}).get('secret_name'), db_user_request.get('metadata', {}).get('namespace')):
-                        log.info(f"Secret with name '{db_user_request.get('spec', {}).get('secret_name')}' already exists, skipping creating of new DB/User. Will skip request. Note: Will create DbUser for entry")
-                        create_db_user(db_user_request)
+                    if find_existing_secret(db_user_request.get('spec', {}).get('secret_name'), db_user_request.get('metadata', {}).get('namespace')):
+                        msg = f"Secret with name '{db_user_request.get('spec', {}).get('secret_name')}' already exists, skipping creating of new DB/User. Will skip request. Note: Will create DbUser for entry"
+                        log.info(msg)
+                        update_request_status(db_user_request, "Fulfilled", msg)
                     else:
                         password = generate_simple_password()
                         db_name_and_username = call_create_script(db_user_request, password)
                         create_secret_for_request(db_user_request, password)
-                        create_db_user(db_user_request)
-
-                    delete_request(db_user_request)
-
+                        msg = f"DbUser for DB {db_name_and_username} with username {db_name_and_username} successfully created. Credentials stored in secret {db_user_request.get("spec", {}).get('secret_name')}."
+                        log.info(msg)
+                        update_request_status(db_user_request, "Fulfilled", msg)
 
             except Exception as ex:
                 log.error(f"Error while in event processing loop: {ex}. Trying to continue.")
                 log.debug(f"Trace:\n{traceback.format_exc()}")
+                update_request_status(event.get('object', {}), "Failed", f"Error while trying to process: {ex}")
     except Exception as e:
         raise Exception(f"Error while trying to loop over events: {e}")
 
@@ -395,10 +317,6 @@ def validate_user_request(request):
     except Exception as e:
         raise Exception(f"Validation error: The secret_name value '{user_and_db_name}' is invalid: {e}")
 
-def watch_db_users():
-    log.info("[STUB] NOT watching DB users")
-    # TODO: Delete user when DbUser bject is deleted (?) => can of worms as other requests might use that user
-
 shutdown_flag = False
 
 def handle_sigterm(signum, frame):
@@ -430,20 +348,13 @@ def main():
             name="DbUserRequestWatcher"
         )
 
-        db_user_thread = threading.Thread(
-            target=watch_db_users,
-            daemon=True,
-            name="DbUserWatcher"
-        )
-
         try:
             db_user_request_thread.start()
-            db_user_thread.start()
         except Exception as e:
-            log.fatal(f"Failed to start threads. Exiting. Cause: {e}")
+            log.fatal(f"Failed to start thread. Exiting. Cause: {e}")
             sys.exit(2)
 
-        log.info("Both watchers started successfully")
+        log.info("Watcher started successfully")
 
         # Keep the main thread alive, exit immediately on shutdown_flag
         while not shutdown_flag:

@@ -22,22 +22,15 @@ Just have a look at the default file as a reference, it is quite small.
 as a proper helm repo chart!
 
 ## Using it
-The provider comes with 2 CRDs: ``DbUserRequest`` and ``DbUser``. You will need to create a ``DbUserRequest``
+The provider comes with the CRD ``DbUserRequest``. You will need to create a ``DbUserRequest``
 object for each DB User you would like. This is then getting picked up by the controller, which will create
 the according user and then create a secret with the generated username and password for the requested DB name.
-Afterwards a DbUser object is created and the DbUserRequest object is deleted to show successful processing.
+Afterwards the Status of the DbUserRequest object is updated accordingly.
 
-If a DbUser object already exists for the DbUserRequest object, the creation of any users or objects is skipped and
-the DbUserRequest object is deleted.
+If the secret which should be generated already exists, no user will be created and only the Status of the object will be updated.
 
-If the secret which should be generated already exists, no user will be created and the according DbUser object will be created
-before the request object is deleted.
-
-This behaviour should make it safe to redeploy DbUserRequest objects for DbUsers that already exist. So this
+This behaviour should make it safe to redeploy DbUserRequest objects for secrets that already exist. So this
 controller should work with CI/CD tools like ArgoCD (which I am using).
-
-**Note:** As the controller deletes DbUserRequest objects, do not use any "self-healing" options for things
-like ArgoCD, as that would lead to a constant cycle of creation and deletion.
 
 A DbUserRequest looks like this:
 ```yaml
@@ -61,19 +54,4 @@ dbSchema: public # Only generated for posgres, always public
 dbType: postgres # or mariadb
 dbTypeAlt: postgresql # or mysql
 dbTypeCustom: pgsql # Value from custom_db_name_prop in request. Field does not exist if not set in request
-```
-
-The generated DbUser object will look like this:
-```yaml
-Name:         db-user-test1
-Namespace:    default # Whatever namespace the request was created in
-Labels:       <none>
-Annotations:  <none>
-API Version:  notepass.de/v1
-Kind:         DbUser
-Spec:
-  Created:      2025-11-26T15:22:00.686811+00:00 # Whenever the DbUserRequest was first fulfilled
-  db_name:      my_db_name # Name of the created DB (Lowercase version of the given name)
-  secret_name:  db-user-test1-secret # Name of the secret the credentials are stored in
-Events:         <none>
 ```
