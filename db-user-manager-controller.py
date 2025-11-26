@@ -18,8 +18,8 @@ from datetime import datetime, timezone
 
 log_level = logging.INFO
 
-if os.environ['LOG_LEVEL']:
-    match os.environ['LOG_LEVEL']:
+if os.environ.get('LOG_LEVEL'):
+    match os.environ.get('LOG_LEVEL'):
         case "DEBUG":
             log_level = logging.DEBUG
         case "INFO":
@@ -200,49 +200,56 @@ def create_custom_object_watch(plural):
     except Exception as e:
         raise Exception(f"Could not create a watch for notepass.de:{plural}:v1. Reason: {e}")
 
-
-def find_existing_dbuser_by_db_name(request):
-    return None
+def find_existing_dbuser(name, namespace):
     """
-    Find an existing DbUser by db_name in the specified namespace
+    Find an existing DbUser custom object by its resource name in the given namespace.
 
     Args:
-        db_name: The database name to search for (uppercase)
-        namespace: Kubernetes namespace to search in
+        name: Name of the DbUser resource to look up
+        namespace: Namespace where the DbUser resource should reside
 
     Returns:
-        DbUser object if found, None otherwise
+        The DbUser object (dict) if found, otherwise None.
     """
-    metadata_obj = request.get('metadata')
-    spec = request.get('spec')
-    namespace = metadata_obj.get('namespace')
-    db_name = spec.get('db_name').lower()
-
     api_instance = client.CustomObjectsApi()
     group = 'notepass.de'
     version = 'v1'
     plural = 'dbusers'
 
     try:
-        # List all DbUser objects in the namespace
-        response = api_instance.list_namespaced_custom_object(
+        obj = api_instance.get_namespaced_custom_object(
             group=group,
             version=version,
             namespace=namespace,
-            plural=plural
+            plural=plural,
+            name=name
         )
-
-        # Check if any DbUser has a matching db_name
-        for item in response.get('items', []):
-            spec = item.get('spec', {})
-            existing_db_name = spec.get('db_name', '')
-            if existing_db_name == db_name:
-                print(f"Found existing DbUser with db_name '{db_name}': {item['metadata']['name']}")
-                return item
-
-        return None
+        return obj
     except ApiException as e:
-        raise Exception(f"Exception when listing DbUser objects: {e}")
+        # If the object isn't found, return None. Otherwise re-raise as exception.
+        if hasattr(e, 'status') and e.status == 404:
+            return None
+        raise Exception(f"Exception when retrieving DbUser '{name}' in namespace '{namespace}': {e}")
+
+def find_existing_secret(name, namespace):
+    """
+    Find an existing Kubernetes Secret by name in the given namespace.
+
+    Args:
+        name: Name of the Secret resource to look up
+        namespace: Namespace where the Secret resource should reside
+
+    Returns:
+        The V1Secret object if found, otherwise None.
+    """
+    v1 = client.CoreV1Api()
+    try:
+        secret = v1.read_namespaced_secret(name=name, namespace=namespace)
+        return secret
+    except ApiException as e:
+        if hasattr(e, 'status') and e.status == 404:
+            return None
+        raise Exception(f"Exception when retrieving Secret '{name}' in namespace '{namespace}': {e}")
 
 def create_secret_for_request(request, password):
     metadata_obj = request.get('metadata')
@@ -315,10 +322,13 @@ def watch_user_requests():
                         continue
 
                     # TODO: Also checkk if the secret already exists. Creation order is secret -> dbuser -> delete request!
-                    if find_existing_dbuser_by_db_name(db_user_request):
+                    if find_existing_dbuser(db_user_request.get('metadata', {}).get('name'), db_user_request.get('metadata', {}).get('namespace')):
                         # TODO: Copy secret in this case. Also integrate find_existing_dbuser_by_db_name into this case, where there is another DBUR with a different name but same DB.
                         # Both cases should just copy the secret.
                         log.info(f"DbUser with name '{source_name}' already exists, skipping creating of new DB/User. Will skip request. Note: Secrets are not copied!")
+                    elif find_existing_secret(db_user_request.get('spec', {}).get('secret_name'), db_user_request.get('metadata', {}).get('namespace')):
+                        log.info(f"Secret with name '{db_user_request.get('spec', {}).get('secret_name')}' already exists, skipping creating of new DB/User. Will skip request. Note: Will create DbUser for entry")
+                        create_db_user(db_user_request)
                     else:
                         password = generate_simple_password()
                         db_name_and_username = call_create_script(db_user_request, password)
