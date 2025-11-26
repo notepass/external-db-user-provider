@@ -10,7 +10,7 @@ then
   exit 1
 fi
 
-if [ ! -d "SOURCE_DIR" ]
+if [ ! -d "$SOURCE_DIR" ]
 then
   echo "Missing chart source directory $SOURCE_DIR. This seems wrong. Aborting!"
   exit 1
