@@ -1,0 +1,16 @@
+logging:
+  logLevel: INFO
+
+config:
+  postgres:
+    secret:
+      name: pg-admin-creds
+      usernameKey: username
+      passwordKey: password
+    host: 127.0.0.1
+  mariadb:
+    secret:
+      name: mariadb-admin-creds
+      usernameKey: username
+      passwordKey: password
+    host: 127.0.0.1

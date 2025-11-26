@@ -1,0 +1,20 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name:  db-user-provider-role
+rules:
+  - apiGroups: ["notepass.de"]
+    resources: ["dbuserrequests"]
+    verbs: ["get", "list", "watch", "delete"]
+  - apiGroups: [ "notepass.de" ]
+    resources: [ "dbusers", "dbuser" ]
+    verbs: [ "create", "get", "update", "watch", "list" ]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "get", "update"]
+  - apiGroups: [ "" ]
+    resources: [ "events" ]
+    verbs: [ "create" ]
+  - apiGroups: [ "" ]
+    resources: [ "namespaces" ]
+    verbs: [ "get", "list" ]

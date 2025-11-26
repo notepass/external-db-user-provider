@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: db-user-provider-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: db-user-provider-controller
+  template:
+    metadata:
+      labels:
+        app: db-user-provider-controller
+    spec:
+      serviceAccountName:  db-user-provider-sa
+      containers:
+        - name: controller
+          image: ghcr.io/notepass/external-db-user-provider:main-13c1867
+          #image: nginx
+          env:
+            - name: MYSQL_HOST
+              value: {{ .Values.config.mariadb.host }}
+            - name:  PGHOST
+              value: {{ .Values.config.postgres.host }}
+            - name: LOG_LEVEL
+              value: {{ .Values.logging.logLevel }}
+            - name: MARIADB_ADMIN_USER_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.config.mariadb.secret.name }}
+                  key: {{ .Values.config.mariadb.secret.usernameKey }}
+            - name: MYSQL_PWD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.config.mariadb.secret.name }}
+                  key: {{ .Values.config.mariadb.secret.passwordKey }}
+            - name:  PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.config.postgres.secret.name }}
+                  key: {{ .Values.config.postgres.secret.usernameKey }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.config.postgres.secret.name }}
+                  key: {{ .Values.config.postgres.secret.passwordKey }}
