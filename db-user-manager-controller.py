@@ -202,7 +202,7 @@ def create_custom_object_watch(plural):
 
 
 def find_existing_dbuser_by_db_name(request):
-    return false
+    return None
     """
     Find an existing DbUser by db_name in the specified namespace
 
