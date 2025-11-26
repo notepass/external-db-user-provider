@@ -20,7 +20,7 @@ jobs:
         id: update_all
         run: |
           chmod +x ./.github/package-and-index.sh
-          ./.github/package-and-index.sh
+          GHA=true ./.github/package-and-index.sh
 
       - name: Commit and push changes
         if: steps.update_all.outputs.changes_present == 'true'
