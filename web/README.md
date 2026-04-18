@@ -1,4 +1,4 @@
-# External DB suer provider
+# External DB user provider
 This repo contains a kubernetes resource to create DB users in external (or also internal, probably) databases
 to automate DB user bootstrapping. It is currently compatible with postgres and mariadb/mysql.  
 The provider itself is very minimalistic and might not fit your use case, so customisation might be necesarry.
