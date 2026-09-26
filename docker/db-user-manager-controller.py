@@ -266,7 +266,7 @@ def watch_user_requests():
                     log.error(f"Error while in event processing loop: {ex}. Trying to continue.")
                     log.debug(f"Trace:\n{traceback.format_exc()}")
                     try:
-                        update_request_status(event.get('object', {}), "Failed", f"Error while trying to process: {ex}")
+                        update_request_status(event.get('object', {}) if isinstance(event, dict) else {}, "Failed", f"Error while trying to process: {ex}")
                     except Exception as status_ex:
                         log.error(f"Additionally failed to update request status to Failed: {status_ex}")
         except Exception as e:
