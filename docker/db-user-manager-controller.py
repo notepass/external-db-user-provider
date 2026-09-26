@@ -98,7 +98,6 @@ def call_create_script(request, password):
         script_path = 'create-pg-user.sh'
         pg_options = spec.get('postgres', {})
         pg_extensions = pg_options.get('extensions')
-        extensions = spec.get('extensions')
         if pg_extensions and isinstance(pg_extensions, list):
             extensions = pg_extensions
     else:
@@ -111,7 +110,8 @@ def call_create_script(request, password):
     result = subprocess.run(cmd, capture_output=True, text=True)
 
     if result.returncode == 0:
-        log.info(f"Successfully called {script_path} to create DB {db_name}. Output:\n====[STDOUT]====\n {result.stdout}\n====[STDERR]====\n{result.stderr}\n====[END]====")
+        log.info(f"Successfully called {script_path} to create DB {db_name}.")
+        log.debug(f"Output:\n====[STDOUT]====\n {result.stdout}\n====[STDERR]====\n{result.stderr}\n====[END]====")
         return db_name
     else:
         raise Exception(f"Script {script_path} returned with exit code {result.returncode}.\n====[STDOUT]====\n {result.stdout}\n====[STDERR]====\n{result.stderr}\n====[END]====")
@@ -179,7 +179,10 @@ def create_secret_for_request(request, password):
     is_pg = spec.get('db_type').lower() == 'postgres'
 
     db_type_alt = 'postgresql' if is_pg else 'mysql'
-    db_host = os.environ['PGHOST'] if is_pg else os.environ['MYSQL_HOST']
+    env_var = 'PGHOST' if is_pg else 'MYSQL_HOST'
+    db_host = os.environ.get(env_var)
+    if not db_host:
+        raise Exception(f"Required environment variable '{env_var}' is not set")
 
     values = {
         "dbDb": spec.get('db_name').lower(),
@@ -219,51 +222,57 @@ def create_secret(values, name, namespace):
 
 def watch_user_requests():
     log.info("Watching DB user requests")
-    try:
-        for event in create_custom_object_watch("dbuserrequests"):
-            try:
-                # TODO: Move isInstance logic to validation
-                # TODO: Parse reqeust as object an pass that to make life easier
-                if not isinstance(event, dict):
-                    log.warning(f"Received non-dict event: {event}. Skipping.")
-                    continue
-                event_type = event.get('type')
-                if event_type == 'ADDED':
-                    db_user_request = event.get('object', {})
-                    if db_user_request.get('status', {}).get('phase', 'UNSET') != "Pending":
-                        log.debug(f"Not processing DBUR '{db_user_request.get('metadata', {}).get('namespace')}:{db_user_request.get('metadata', {}).get('name')}', as state is '{db_user_request.get('status', {}).get('phase', 'UNSET')}' and not 'Pending'")
+    while not shutdown_flag:
+        try:
+            for event in create_custom_object_watch("dbuserrequests"):
+                try:
+                    # TODO: Move isInstance logic to validation
+                    # TODO: Parse reqeust as object an pass that to make life easier
+                    if not isinstance(event, dict):
+                        log.warning(f"Received non-dict event: {event}. Skipping.")
                         continue
-                    if not isinstance(db_user_request, dict):
-                        log.warning(f"Received non-dict db_user_request: {db_user_request}. Skipping.")
-                        continue
-                    source_name = db_user_request.get('metadata', {}).get('name')
-                    source_namespace = db_user_request.get('metadata', {}).get('namespace')
-                    log.info(f"New DbUserRequest created with name '{source_name}' in '{source_namespace}'. Trying to process")
+                    event_type = event.get('type')
+                    if event_type == 'ADDED':
+                        db_user_request = event.get('object', {})
+                        if not isinstance(db_user_request, dict):
+                            log.warning(f"Received non-dict db_user_request: {db_user_request}. Skipping.")
+                            continue
+                        if db_user_request.get('status', {}).get('phase', 'UNSET') != "Pending":
+                            log.debug(f"Not processing DBUR '{db_user_request.get('metadata', {}).get('namespace')}:{db_user_request.get('metadata', {}).get('name')}', as state is '{db_user_request.get('status', {}).get('phase', 'UNSET')}' and not 'Pending'")
+                            continue
+                        source_name = db_user_request.get('metadata', {}).get('name')
+                        source_namespace = db_user_request.get('metadata', {}).get('namespace')
+                        log.info(f"New DbUserRequest created with name '{source_name}' in '{source_namespace}'. Trying to process")
+                        try:
+                            validate_user_request(db_user_request)
+                        except Exception as exc:
+                            log.error(f"Validation failed for request with name '{source_name}' in '{source_namespace}': {exc}. Will ignore request.")
+                            continue
+
+                        # TODO: Also checkk if the secret already exists. Creation order is secret -> dbuser -> delete request!
+                        if find_existing_secret(db_user_request.get('spec', {}).get('secret_name'), db_user_request.get('metadata', {}).get('namespace')):
+                            msg = f"Secret with name '{db_user_request.get('spec', {}).get('secret_name')}' already exists, skipping creating of new DB/User. Will skip request."
+                            log.info(msg)
+                            update_request_status(db_user_request, "Fulfilled", msg)
+                        else:
+                            password = generate_simple_password()
+                            db_name_and_username = call_create_script(db_user_request, password)
+                            create_secret_for_request(db_user_request, password)
+                            msg = f"DbUser for DB {db_name_and_username} with username {db_name_and_username} successfully created. Credentials stored in secret {db_user_request.get('spec', {}).get('secret_name')}."
+                            log.info(msg)
+                            update_request_status(db_user_request, "Fulfilled", msg)
+
+                except Exception as ex:
+                    log.error(f"Error while in event processing loop: {ex}. Trying to continue.")
+                    log.debug(f"Trace:\n{traceback.format_exc()}")
                     try:
-                        validate_user_request(db_user_request)
-                    except Exception as exc:
-                        log.error(f"Validation failed for request with name '{source_name}' in '{source_namespace}': {exc}. Will ignore request.")
-                        continue
-
-                    # TODO: Also checkk if the secret already exists. Creation order is secret -> dbuser -> delete request!
-                    if find_existing_secret(db_user_request.get('spec', {}).get('secret_name'), db_user_request.get('metadata', {}).get('namespace')):
-                        msg = f"Secret with name '{db_user_request.get('spec', {}).get('secret_name')}' already exists, skipping creating of new DB/User. Will skip request."
-                        log.info(msg)
-                        update_request_status(db_user_request, "Fulfilled", msg)
-                    else:
-                        password = generate_simple_password()
-                        db_name_and_username = call_create_script(db_user_request, password)
-                        create_secret_for_request(db_user_request, password)
-                        msg = f"DbUser for DB {db_name_and_username} with username {db_name_and_username} successfully created. Credentials stored in secret {db_user_request.get('spec', {}).get('secret_name')}."
-                        log.info(msg)
-                        update_request_status(db_user_request, "Fulfilled", msg)
-
-            except Exception as ex:
-                log.error(f"Error while in event processing loop: {ex}. Trying to continue.")
-                log.debug(f"Trace:\n{traceback.format_exc()}")
-                update_request_status(event.get('object', {}), "Failed", f"Error while trying to process: {ex}")
-    except Exception as e:
-        raise Exception(f"Error while trying to loop over events: {e}")
+                        update_request_status(event.get('object', {}) if isinstance(event, dict) else {}, "Failed", f"Error while trying to process: {ex}")
+                    except Exception as status_ex:
+                        log.error(f"Additionally failed to update request status to Failed: {status_ex}")
+        except Exception as e:
+            log.error(f"Watch stream error: {e}. Restarting watch in 5 seconds.")
+            log.debug(f"Trace:\n{traceback.format_exc()}")
+            time.sleep(5)
 
 def validate_db_name(db_name):
     if not db_name:
@@ -333,7 +342,7 @@ def main():
         log.info("Loading configuration")
         load_k8s_config()
     except Exception as e:
-        log.fatal(f"Failed to load configuration. Exiting. Cause: {e}")
+        log.critical(f"Failed to load configuration. Exiting. Cause: {e}")
         sys.exit(1)
 
     log.info("Starting CRD watcher threads")
@@ -350,13 +359,16 @@ def main():
         try:
             db_user_request_thread.start()
         except Exception as e:
-            log.fatal(f"Failed to start thread. Exiting. Cause: {e}")
+            log.critical(f"Failed to start thread. Exiting. Cause: {e}")
             sys.exit(2)
 
         log.info("Watcher started successfully")
 
         # Keep the main thread alive, exit immediately on shutdown_flag
         while not shutdown_flag:
+            if not db_user_request_thread.is_alive():
+                log.critical("Watcher thread died unexpectedly. Exiting.")
+                sys.exit(3)
             time.sleep(1)
 
         log.info("Main loop exiting due to shutdown flag.")
@@ -366,7 +378,7 @@ def main():
         log.info("Shutting down gracefully...")
         sys.exit(0)
     except Exception as e:
-        log.fatal(f"Fatal error in execution: {e}")
+        log.critical(f"Fatal error in execution: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":
