@@ -110,7 +110,8 @@ def call_create_script(request, password):
     result = subprocess.run(cmd, capture_output=True, text=True)
 
     if result.returncode == 0:
-        log.info(f"Successfully called {script_path} to create DB {db_name}. Output:\n====[STDOUT]====\n {result.stdout}\n====[STDERR]====\n{result.stderr}\n====[END]====")
+        log.info(f"Successfully called {script_path} to create DB {db_name}.")
+        log.debug(f"Output:\n====[STDOUT]====\n {result.stdout}\n====[STDERR]====\n{result.stderr}\n====[END]====")
         return db_name
     else:
         raise Exception(f"Script {script_path} returned with exit code {result.returncode}.\n====[STDOUT]====\n {result.stdout}\n====[STDERR]====\n{result.stderr}\n====[END]====")
@@ -233,11 +234,11 @@ def watch_user_requests():
                     event_type = event.get('type')
                     if event_type == 'ADDED':
                         db_user_request = event.get('object', {})
-                        if db_user_request.get('status', {}).get('phase', 'UNSET') != "Pending":
-                            log.debug(f"Not processing DBUR '{db_user_request.get('metadata', {}).get('namespace')}:{db_user_request.get('metadata', {}).get('name')}', as state is '{db_user_request.get('status', {}).get('phase', 'UNSET')}' and not 'Pending'")
-                            continue
                         if not isinstance(db_user_request, dict):
                             log.warning(f"Received non-dict db_user_request: {db_user_request}. Skipping.")
+                            continue
+                        if db_user_request.get('status', {}).get('phase', 'UNSET') != "Pending":
+                            log.debug(f"Not processing DBUR '{db_user_request.get('metadata', {}).get('namespace')}:{db_user_request.get('metadata', {}).get('name')}', as state is '{db_user_request.get('status', {}).get('phase', 'UNSET')}' and not 'Pending'")
                             continue
                         source_name = db_user_request.get('metadata', {}).get('name')
                         source_namespace = db_user_request.get('metadata', {}).get('namespace')
@@ -341,7 +342,7 @@ def main():
         log.info("Loading configuration")
         load_k8s_config()
     except Exception as e:
-        log.fatal(f"Failed to load configuration. Exiting. Cause: {e}")
+        log.critical(f"Failed to load configuration. Exiting. Cause: {e}")
         sys.exit(1)
 
     log.info("Starting CRD watcher threads")
@@ -358,7 +359,7 @@ def main():
         try:
             db_user_request_thread.start()
         except Exception as e:
-            log.fatal(f"Failed to start thread. Exiting. Cause: {e}")
+            log.critical(f"Failed to start thread. Exiting. Cause: {e}")
             sys.exit(2)
 
         log.info("Watcher started successfully")
@@ -366,7 +367,7 @@ def main():
         # Keep the main thread alive, exit immediately on shutdown_flag
         while not shutdown_flag:
             if not db_user_request_thread.is_alive():
-                log.fatal("Watcher thread died unexpectedly. Exiting.")
+                log.critical("Watcher thread died unexpectedly. Exiting.")
                 sys.exit(3)
             time.sleep(1)
 
@@ -377,7 +378,7 @@ def main():
         log.info("Shutting down gracefully...")
         sys.exit(0)
     except Exception as e:
-        log.fatal(f"Fatal error in execution: {e}")
+        log.critical(f"Fatal error in execution: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":
