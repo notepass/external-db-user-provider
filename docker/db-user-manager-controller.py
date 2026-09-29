@@ -93,9 +93,9 @@ def call_create_script(request, password):
 
     extensions = []
     if db_type == 'mariadb':
-        script_path = 'create-mariadb-user.sh'
+        script_path = '/app/create-mariadb-user.sh'
     elif db_type == 'postgres':
-        script_path = 'create-pg-user.sh'
+        script_path = '/app/create-pg-user.sh'
         pg_options = spec.get('postgres', {})
         pg_extensions = pg_options.get('extensions')
         if pg_extensions and isinstance(pg_extensions, list):
