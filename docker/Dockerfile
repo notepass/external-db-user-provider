@@ -6,7 +6,7 @@ WORKDIR /app
 
 # Install system dependencies if needed
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates postgresql-client
+    ca-certificates postgresql-client mariadb-client
 
 # Copy requirements file
 COPY requirements.txt .
